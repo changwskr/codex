@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>구구단 | 농협 상호금융 정보계</title>
+    <style>
+        :root {
+            --nh-green: #00a04a;
+            --nh-green-dark: #00803a;
+            --bg: #f4f7f5;
+            --card: #ffffff;
+            --text: #1f2937;
+            --muted: #6b7280;
+            --border: #e5e7eb;
+            --shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic",
+                         system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--nh-green) 0%, var(--nh-green-dark) 100%);
+            color: white;
+            padding: 28px 24px;
+            box-shadow: var(--shadow);
+        }
+
+        header .inner {
+            max-width: 960px;
+            margin: 0 auto;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 22px;
+            letter-spacing: -0.01em;
+        }
+
+        header p {
+            margin: 6px 0 0;
+            opacity: 0.9;
+            font-size: 13px;
+        }
+
+        main {
+            max-width: 960px;
+            margin: 28px auto;
+            padding: 0 24px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            box-shadow: var(--shadow);
+            padding: 24px;
+        }
+
+        .card + .card { margin-top: 20px; }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        label {
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        select, button {
+            font-size: 15px;
+            font-family: inherit;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            padding: 10px 14px;
+            background: white;
+            color: var(--text);
+        }
+
+        select:focus, button:focus { outline: 2px solid var(--nh-green); outline-offset: 1px; }
+
+        button.primary {
+            background: var(--nh-green);
+            color: white;
+            border-color: var(--nh-green);
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.15s ease;
+        }
+
+        button.primary:hover { background: var(--nh-green-dark); }
+        button.primary:disabled { background: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
+
+        button.ghost {
+            background: white;
+            color: var(--text);
+            cursor: pointer;
+        }
+
+        button.ghost:hover { background: #f3f4f6; }
+
+        .meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            font-size: 14px;
+            color: var(--muted);
+        }
+
+        .meta strong { color: var(--text); font-size: 16px; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+            gap: 10px;
+        }
+
+        .cell {
+            background: #f9fafb;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+        }
+
+        .cell:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 14px rgba(0, 160, 74, 0.12);
+            border-color: var(--nh-green);
+        }
+
+        .cell .expr { color: var(--muted); font-size: 14px; }
+        .cell .result { font-weight: 700; font-size: 18px; color: var(--nh-green-dark); }
+
+        .empty, .error {
+            padding: 16px;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        .empty { background: #f9fafb; color: var(--muted); }
+        .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+
+        .footer {
+            text-align: center;
+            font-size: 12px;
+            color: var(--muted);
+            margin: 24px 0;
+        }
+
+        code {
+            background: #f3f4f6;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="inner">
+            <h1>구구단 조회</h1>
+            <p>농협 상호금융 정보계 · 학습용 샘플 화면</p>
+        </div>
+    </header>
+
+    <main>
+        <section class="card">
+            <div class="controls">
+                <label for="dan">단 선택</label>
+                <select id="dan">
+                    <option value="2">2단</option>
+                    <option value="3">3단</option>
+                    <option value="4">4단</option>
+                    <option value="5">5단</option>
+                    <option value="6">6단</option>
+                    <option value="7">7단</option>
+                    <option value="8">8단</option>
+                    <option value="9">9단</option>
+                </select>
+                <button id="fetchBtn" class="primary" type="button">조회</button>
+                <button id="allBtn" class="ghost" type="button">전체(2~9단)</button>
+            </div>
+        </section>
+
+        <section id="resultSection" class="card" style="display:none;">
+            <div class="meta">
+                <div><strong id="title">결과</strong></div>
+                <div id="timestamp"></div>
+            </div>
+            <div id="results"></div>
+        </section>
+
+        <p class="footer">호출 API: <code>GET /api/v1/gugudan/{dan}</code></p>
+    </main>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+
+        async function fetchDan(dan) {
+            const res = await fetch(`/api/v1/gugudan/${dan}`);
+            if (!res.ok) {
+                let detail = '';
+                try {
+                    const body = await res.json();
+                    detail = body.message || JSON.stringify(body);
+                } catch (_) { /* ignore */ }
+                throw new Error(`API 오류 (${res.status}) ${detail}`);
+            }
+            return res.json();
+        }
+
+        function renderRows(rows) {
+            return rows.map(r => `
+                <div class="cell">
+                    <span class="expr">${r.multiplicand} × ${r.multiplier}</span>
+                    <span class="result">${r.result}</span>
+                </div>
+            `).join('');
+        }
+
+        function renderError(message) {
+            $('resultSection').style.display = '';
+            $('title').textContent = '오류';
+            $('timestamp').textContent = '';
+            $('results').innerHTML = `<div class="error">${message}</div>`;
+        }
+
+        async function loadOne() {
+            const dan = Number($('dan').value);
+            $('fetchBtn').disabled = true;
+            try {
+                const body = await fetchDan(dan);
+                $('resultSection').style.display = '';
+                $('title').textContent = `${body.data.dan}단`;
+                $('timestamp').textContent = body.timestamp ?? '';
+                $('results').innerHTML = `<div class="grid">${renderRows(body.data.rows)}</div>`;
+            } catch (e) {
+                renderError(e.message);
+            } finally {
+                $('fetchBtn').disabled = false;
+            }
+        }
+
+        async function loadAll() {
+            $('allBtn').disabled = true;
+            try {
+                const dans = [2,3,4,5,6,7,8,9];
+                const results = await Promise.all(dans.map(fetchDan));
+                $('resultSection').style.display = '';
+                $('title').textContent = '전체 구구단 (2~9단)';
+                $('timestamp').textContent = results[0].timestamp ?? '';
+                $('results').innerHTML = results.map(b => `
+                    <h3 style="margin:18px 0 8px;font-size:15px;color:#374151;">${b.data.dan}단</h3>
+                    <div class="grid">${renderRows(b.data.rows)}</div>
+                `).join('');
+            } catch (e) {
+                renderError(e.message);
+            } finally {
+                $('allBtn').disabled = false;
+            }
+        }
+
+        $('fetchBtn').addEventListener('click', loadOne);
+        $('allBtn').addEventListener('click', loadAll);
+
+        loadOne();
+    </script>
+</body>
+</html>
