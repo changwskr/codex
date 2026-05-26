@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: nonghyup-mutual-finance-info-system
+  profiles:
+    active: local
+  jackson:
+    time-zone: Asia/Seoul
+
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    kr.co.nonghyup.sangho.infosystem: INFO
