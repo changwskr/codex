@@ -1,0 +1,484 @@
+아래는 VM당 처리량을 250 TPS 기준으로 다시 정리한 NSIGHT 용량산정 기준입니다. 핵심은 기존과 동일하게 세션 수는 전체 사용자 기준, TPS·Thread·DB Pool·서버 수는 동시 요청자 기준으로 분리하는 것입니다. NSIGHT 변경 기준은 전체 사용자 21,600명, 설계 세션 26,000~28,000, 목표 응답시간 3초, 5%/10%/15% 동시 요청률 기준으로 정리합니다.
+NSIGHT 용량산정 기준
+8 vCPU / 32GB VM, VM당 250 TPS 기준
+1. 기준에 따른 동시 요청자 / TPS 산정
+1.1 기본 전제
+1.2 산정 공식
+동시 요청자 = 전체 사용자 수 × 동시 요청률
+TPS = 동시 요청자 ÷ 목표 응답시간
+1.3 동시 요청률별 TPS 산정
+따라서 NSIGHT 온라인 AP의 기준 목표는 다음처럼 잡는 것이 적정합니다.
+2. 전체 환경 설정 기준 요약
+2.1 VM
+주의할 점은 250 TPS/VM은 “모든 거래가 평균 3초 걸려도 250 TPS를 낸다”는 뜻이 아닙니다. 3초는 목표 응답시간 또는 p95 기준으로 보고, 실제 평균 응답시간은 1초 내외~1.5초 수준으로 관리되어야 8 vCPU VM에서 250 TPS 기준이 현실적입니다. 기존 기준에서도 8 vCPU / 32GB VM은 Java/Tomcat 기반 정보계 AP의 Scale-Out 단위이며 Core당 30~40 TPS, VM당 약 250 TPS 산정 기준으로 정리되어 있습니다.
+2.2 처리량 및 운영 임계치
+3. 서버 수 기준
+3.1 AP 수 산정
+3.1.1 단순 TPS 기준 산정
+필요 VM 수 = 목표 TPS ÷ VM당 TPS
+단순 계산만 보면 720 TPS는 3대, 1,080 TPS는 5대면 됩니다. 그러나 운영에서는 센터 이중화, AP 장애, 배포 중 제외, DeltaManager Cluster, N+1 여유를 반영해야 하므로 단순 필요 VM보다 크게 잡아야 합니다.
+3.1.2 운영 기준 AP 산정
+3.1.3 권장 기준
+1차 권고안은 센터당 4대, 총 8대입니다. 이 구성은 정상 시 양 센터 Active-Active로 부하를 나누고, 1개 센터 장애 시에도 피크 720 TPS를 잔여 센터가 감당할 수 있도록 보는 구조입니다.
+3.2 센터 이중화 기준
+정리하면, 720 TPS 피크 설계는 센터당 4대, 총 8대, 1,080 TPS 스트레스 설계는 센터당 6대, 총 12대를 기준으로 보는 것이 안정적입니다.
+4. WEB SERVER / L4 설정
+[WebTopSuite 단말]
+↓
+[GSLB DNS Lookup]
+↓
+[센터 L4 VIP]
+↓
+[Tomcat WAS / Spring Boot AP]
+↓
+[RDW / CruzAPIM]
+Timeout 순서는 반드시 다음 구조가 되어야 합니다.
+DB Query Timeout
+<
+Spring Transaction Timeout
+<
+WebTopSuite Request Timeout
+<
+L4 Idle Timeout
+권장값은 다음과 같습니다.
+DB Query Timeout: 2~3초
+Spring Transaction Timeout: 4~5초
+WebTopSuite Request Timeout: 6~8초
+L4 Idle Timeout: 10~15초 이상
+5. TOMCAT 설정
+5.1 세션 설정
+세션은 TPS를 직접 증가시키지 않습니다. 세션 시간이 길어질수록 오래 살아 있는 Active Session과 DeltaManager 복제 대상이 늘어나므로, 세션 데이터는 반드시 작게 유지해야 합니다.
+5.2 DeltaManager 설정
+Tomcat DeltaManager는 센터 내부 AP Cluster에 한정해 적용하고, 센터 장애 시에는 기본적으로 재로그인 정책을 적용하는 것이 운영 단순성과 장애 격리 측면에서 적절합니다.
+5.3 Tomcat 실행 Thread
+5.3.1 산정 관점
+필요 Thread 수 = VM당 TPS × 평균 응답시간 × 여유율
+다만 여기서 응답시간은 항상 3초 평균으로 보면 안 됩니다. 3초를 평균으로 잡으면 250 TPS/VM 기준 필요 Thread가 750개 이상이 되어 8 vCPU VM에서 Context Switching과 메모리 부담이 커집니다.
+따라서 운영 기준은 다음처럼 봅니다.
+5.3.2 Tomcat 권장 설정
+5.3.3 Tomcat Connector 예시
+<Connector port="8080"
+protocol="org.apache.coyote.http11.Http11NioProtocol"
+maxThreads="500"
+minSpareThreads="100"
+acceptCount="300"
+maxConnections="10000"
+connectionTimeout="8000"
+keepAliveTimeout="5000"
+maxKeepAliveRequests="100"
+URIEncoding="UTF-8"
+enableLookups="false" />
+6. Spring Boot / Spring Framework 영역 설정
+6.1 server 설정
+server:
+port: 8080
+servlet:
+context-path: /nsight
+session:
+timeout: 30m
+cookie:
+name: JSESSIONID
+http-only: true
+secure: true
+same-site: Lax
+tomcat:
+threads:
+max: 500
+min-spare: 100
+accept-count: 300
+max-connections: 10000
+connection-timeout: 8s
+keep-alive-timeout: 5s
+max-keep-alive-requests: 100
+7. Spring Transactional 환경
+세션 타임아웃과 트랜잭션 타임아웃은 완전히 다릅니다. 세션은 로그인 상태 유지 시간이고, 트랜잭션 타임아웃은 한 건의 업무 요청이 서버·DB·연계 자원을 붙잡을 수 있는 최대 시간입니다.
+Transaction 예시
+@Transactional(
+transactionManager = "rdwTransactionManager",
+readOnly = true,
+timeout = 5,
+rollbackFor = Exception.class
+)
+public SingleViewResponse searchSingleView(SingleViewRequest request) {
+return singleViewService.search(request);
+}
+기본 원칙
+8. DataSource / HikariCP / DB Connection Pool 설정
+8.1 기본 원칙
+NSIGHT에서는 온라인 조회, 배치, 분석, 연계 처리가 동일 자원을 경쟁하지 않도록 Pool을 분리해야 합니다. 특히 RDW는 Single View와 현행성 조회 중심, ADW는 분석·집계·BI 중심으로 분리하는 것이 자원 경합 차단의 핵심입니다.
+8.2 HikariCP 설정 기준
+Hikari Connection Timeout은 SQL 실행시간이 아니라, Pool에서 DB Connection을 얻기 위해 기다리는 최대 시간입니다. SQL 수행시간은 MyBatis statement timeout 또는 JDBC queryTimeout으로 별도 통제해야 합니다.
+DB Connection 예산 예시
+따라서 DBA와 RDW 전체 세션 예산을 사전에 합의해야 합니다. AP만 늘리고 DB Connection 예산을 통제하지 않으면 RDW 세션 고갈이 발생할 수 있습니다.
+8.3 application.yml 예시
+일반 마케팅 AP
+spring:
+datasource:
+rdw:
+jdbc-url: jdbc:oracle:thin:@//rdw-vip.nh.local:1521/RDW
+username: ${RDW_DB_USER}
+password: ${RDW_DB_PASSWORD}
+driver-class-name: oracle.jdbc.OracleDriver
+hikari:
+pool-name: RDW-MKT-HIKARI
+maximum-pool-size: 30
+minimum-idle: 10
+connection-timeout: 3000
+validation-timeout: 2000
+idle-timeout: 600000
+max-lifetime: 1800000
+keepalive-time: 300000
+auto-commit: false
+connection-test-query: SELECT 1 FROM DUAL
+SingleView AP
+spring:
+datasource:
+rdw:
+jdbc-url: jdbc:oracle:thin:@//rdw-vip.nh.local:1521/RDW
+username: ${RDW_DB_USER}
+password: ${RDW_DB_PASSWORD}
+driver-class-name: oracle.jdbc.OracleDriver
+hikari:
+pool-name: RDW-SINGLEVIEW-HIKARI
+maximum-pool-size: 40
+minimum-idle: 15
+connection-timeout: 3000
+validation-timeout: 2000
+idle-timeout: 600000
+max-lifetime: 1800000
+keepalive-time: 300000
+auto-commit: false
+connection-test-query: SELECT 1 FROM DUAL
+9. MyBatis / Query Timeout 설정
+MyBatis 예시
+mybatis:
+configuration:
+default-statement-timeout: 3
+default-fetch-size: 200
+map-underscore-to-camel-case: true
+Mapper 단위 Timeout 예시
+@Select("SELECT ... FROM RDW_CUSTOMER WHERE CUSTOMER_ID = #{customerId}")
+@Options(timeout = 3, fetchSize = 200)
+CustomerDto selectCustomer(String customerId);
+10. CruzAPIM 연계 Timeout 설정
+CruzAPIM 호출은 DB Pool과 다른 병목을 만듭니다. DB Connection은 여유가 있어도 CruzAPIM 응답 지연 때문에 Tomcat Thread가 고갈될 수 있으므로 별도 Timeout과 HTTP Client Pool을 설정해야 합니다.
+Timeout 관계
+CruzAPIM Connect Timeout: 1~2초
+CruzAPIM Read Timeout: 3~5초
+Spring Transaction Timeout: 5초 내외
+WebTopSuite Timeout: 6~8초
+11. JVM 설정
+11.1 일반 AP JVM
+-Xms12g
+-Xmx12g
+-Xss512k
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=200
+-XX:MetaspaceSize=256m
+-XX:MaxMetaspaceSize=1g
+-XX:ReservedCodeCacheSize=256m
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/logs/dump
+-XX:+ExitOnOutOfMemoryError
+-Xlog:gc*:file=/logs/gc/nsight-ap-gc-%t.log:time,uptime,level,tags:filecount=10,filesize=100M
+-Dfile.encoding=UTF-8
+-Duser.timezone=Asia/Seoul
+-Djava.security.egd=file:/dev/./urandom
+11.2 SingleView AP JVM
+-Xms14g
+-Xmx14g
+-Xss512k
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=200
+-XX:MetaspaceSize=256m
+-XX:MaxMetaspaceSize=1g
+-XX:ReservedCodeCacheSize=256m
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/logs/dump
+-XX:+ExitOnOutOfMemoryError
+-Xlog:gc*:file=/logs/gc/singleview-ap-gc-%t.log:time,uptime,level,tags:filecount=10,filesize=100M
+-Dfile.encoding=UTF-8
+-Duser.timezone=Asia/Seoul
+-Djava.security.egd=file:/dev/./urandom
+11.3 JVM 운영 기준
+GC Pause는 사용자 응답시간 안에 포함됩니다. 따라서 3초 응답 목표를 유지하려면 GC Pause를 일정 수준 이하로 관리해야 합니다.
+12. 최종 영역별 설정값 요약표
+13. 최종 결론
+VM당 처리량을 250 TPS로 잡으면 NSIGHT 온라인 AP 서버 수는 기존 150~200 TPS/VM 기준보다 줄어듭니다. 단순 계산으로는 360 TPS는 2대, 720 TPS는 3대, 1,080 TPS는 5대입니다. 그러나 운영 기준에서는 단순 계산이 아니라 센터 이중화, AP 장애, 배포 제외, N+1 여유, DeltaManager Cluster, DR 감당 능력을 반영해야 합니다.
+따라서 최종 권고는 다음입니다.
+한 문장으로 정리하면, NSIGHT 변경 기준에서는 세션은 26,000~28,000개 수용, 처리량은 720 TPS 피크와 1,080 TPS 스트레스 기준, 서버는 8 vCPU / 32GB VM당 250 TPS로 산정하되 피크/DR 운영 기준으로 센터당 4대, 총 8대를 1차 권장안으로 잡는 것이 타당합니다. 최종 수량은 Single View 선도개발 성능테스트에서 CPU, GC Pause, Tomcat Busy Thread, Hikari Pool Wait, RDW SQL Time, CruzAPIM 응답시간을 측정한 뒤 보정해야 합니다.
+
+[TABLE 1]
+항목 | 기준
+지점 수 | 3,600개
+지점당 사용자 | 6명
+전체 사용자 | 21,600명
+세션 설계 기준 | 26,000~28,000 세션
+일반 온라인 목표 응답시간 | 3초
+VM 기준 사양 | 8 vCPU / 32GB
+VM당 처리 기준 | 250 TPS
+
+[TABLE 2]
+시나리오 | 전체 사용자/세션 | 동시 요청률 | 동시 요청자 | 3초 기준 TPS | 해석
+낮은 부하 | 21,600 | 3% | 648명 | 216 TPS | 평상시 업무 부하
+일반 피크 | 21,600 | 5% | 1,080명 | 360 TPS | 기본 운영 기준
+높은 피크 | 21,600 | 10% | 2,160명 | 720 TPS | 피크 설계 기준
+스트레스 | 21,600 | 15% | 3,240명 | 1,080 TPS | 성능시험/한계 검증 기준
+
+[TABLE 3]
+기준 | 적용 TPS
+기본 운영 기준 | 360 TPS
+피크 설계 기준 | 720 TPS
+스트레스 테스트 기준 | 1,080 TPS
+설계상 대표 목표 | 720 TPS 기준, 1,080 TPS 검증
+
+[TABLE 4]
+항목 | 기준
+VM 기준 사양 | 8 vCPU / 32GB
+VM당 처리 TPS | 250 TPS
+CPU 운영 기준 | 평균 60~70% 이하
+JVM Heap | 일반 AP 12GB, SingleView AP 12~14GB
+OS/APM/로그/Thread Stack 여유 | 14~18GB
+Scale-Out 단위 | VM 단위 수평 확장
+배포 단위 | 업무 AP Cluster 단위
+장애 영향 단위 | VM 1대 장애 시 250 TPS 손실 기준
+
+[TABLE 5]
+영역 | 기준값 | 설명
+VM당 TPS | 250 TPS | AP 1대 처리 기준
+AP CPU | 평균 60~70% 이하 | 75% 이상 지속 시 증설 검토
+JVM Heap 사용률 | 70% 이하 권장 | Old 영역 지속 증가 시 점검
+GC Pause | 200ms 목표 | 3초 응답시간 보호
+Tomcat Busy Thread | 70% 이하 | 80% 이상 지속 시 병목
+Hikari Pool 사용률 | 70~80% 이하 | Pool Wait 발생 시 SQL/Pool 점검
+DB SQL 평균 | 100~300ms 목표 | Single View는 SQL 튜닝 중요
+DB Query Timeout | 2~3초 | 장시간 SQL 차단
+Transaction Timeout | 4~5초 | 온라인 거래 보호
+WebTopSuite Timeout | 6~8초 | 서버 Timeout보다 길게
+L4 Idle Timeout | 10~15초 이상 | Client Timeout보다 길게
+
+[TABLE 6]
+시나리오 | 목표 TPS | VM당 TPS | 단순 필요 VM | 반올림 기준
+일반 피크 | 360 TPS | 250 TPS | 1.44대 | 2대
+높은 피크 | 720 TPS | 250 TPS | 2.88대 | 3대
+스트레스 | 1,080 TPS | 250 TPS | 4.32대 | 5대
+
+[TABLE 7]
+기준 | 단순 필요 VM | 운영 최소 | 권장
+360 TPS | 2대 | 센터당 2대, 총 4대 | 총 4대
+720 TPS | 3대 | 센터당 3대, 총 6대 | 센터당 4대, 총 8대
+1,080 TPS | 5대 | 센터당 5대, 총 10대 | 센터당 6대, 총 12대
+
+[TABLE 8]
+운영 목적 | 권장 AP 수
+기본 운영 기준 | 센터당 2대, 총 4대
+피크 및 DR 감당 기준 | 센터당 4대, 총 8대
+스트레스 / 완전 DR 강화 기준 | 센터당 6대, 총 12대
+
+[TABLE 9]
+기준 | 설명 | 권장
+정상 운영 | 양 센터 Active-Active, 50:50 분산 | 센터당 4대
+AP 1대 장애 | 동일 센터 내 잔여 AP가 처리 | N+1 기준 필요
+1센터 장애 | 잔여 센터가 전체 피크 처리 | 센터당 4대 이상
+스트레스 검증 | 1,080 TPS 기준 검증 | 센터당 5~6대 필요
+센터 간 세션 | 기본 미복제 | 장애 시 재로그인 원칙
+센터 내부 세션 | DeltaManager 적용 | 센터 내부 AP Cluster 한정
+
+[TABLE 10]
+설정 항목 | 권장값 | 설명
+GSLB DNS TTL | 30~60초 | 센터 장애 시 재조회 가능
+L4 Health Check Interval | 5~10초 | AP 상태 확인 주기
+L4 Health Check Timeout | 2~3초 | 지연 AP 빠른 제외
+L4 Fail Count | 2~3회 | 일시 지연과 장애 구분
+L4 Sticky / Persistence | 적용 | JSESSIONID 또는 Source IP 기준
+L4 Sticky Timeout | 40분 | Tomcat Session 30분보다 길게
+L4 Idle Timeout | 10~15초 이상 | WebTopSuite Timeout보다 길게
+WebTopSuite Request Timeout | 6~8초 | Spring Transaction보다 길게
+KeepAlive Timeout | 5초 내외 | 연결 재사용과 자원 점유 균형
+Max Connection | AP 전체 Thread 이상 | 전체 동시 연결 수 보호
+
+[TABLE 11]
+항목 | 권장값 | 설명
+전체 사용자 | 21,600명 | 전체 로그인 가능 사용자
+설계 세션 | 26,000~28,000 세션 | 20~30% 여유율
+기본 Session Timeout | 30분 | 표준 기본값
+장시간 상담 예외 | 60분 | 업무 승인 후 적용
+3시간 세션 | 예외 정책 | 보안·메모리·복제부하 검증 후 적용
+Absolute Session Timeout | 8~12시간 | 업무일 기준 강제 만료
+세션 크기 목표 | 2KB 이하 | DeltaManager 복제 부담 최소화
+세션 크기 최대 | 5KB 이하 | 초과 시 구조 재검토
+세션 저장 가능 | userId, branchId, role, authLevel, maskingLevel | 최소 인증·권한 정보
+세션 저장 금지 | 고객조회 결과, Single View 결과, 거래목록 | 메모리·보안·복제부하 방지
+
+[TABLE 12]
+항목 | 권장값 | 설명
+적용 범위 | 센터 내부 AP Cluster | 센터 간 복제 미적용
+Cluster 단위 | 업무 AP별 분리 | Marketing AP, SingleView AP 분리
+세션 복제 방식 | DeltaManager | 변경 세션 복제
+L4 Sticky | 필수 | 복제 부하 감소
+<distributable/> | 필수 | WAR 기준 web.xml 명시
+세션 객체 | Serializable 필수 | 복제 가능 객체만 저장
+jvmRoute | 필수 | 노드 식별 및 Sticky 연계
+NTP 시간 동기화 | 필수 | 세션 만료·로그 시간 정합성
+
+[TABLE 13]
+기준 | 값
+p95 목표 응답시간 | 3초 이하
+평균 응답시간 목표 | 1.0~1.5초
+VM당 TPS | 250 TPS
+계산상 Thread | 250 × 1.5 × 1.2 = 450
+권장 maxThreads | 400~500
+
+[TABLE 14]
+항목 | 권장값 | 설명
+maxThreads | 400~500 | VM당 실행 Thread
+minSpareThreads | 100 | 피크 진입 대비
+acceptCount | 300~500 | Thread 포화 시 대기 Queue
+maxConnections | 10,000 | 연결 수 상한
+connectionTimeout | 8초 | Client Timeout과 정합
+keepAliveTimeout | 5초 | 연결 장기 점유 방지
+maxKeepAliveRequests | 100 | KeepAlive 재사용 제한
+
+[TABLE 15]
+설정 | 권장값 | 설명
+server.servlet.session.timeout | 30m | 기본 세션 유지
+cookie.http-only | true | JavaScript 접근 차단
+cookie.secure | true | HTTPS 전용 전송
+cookie.same-site | Lax | 일반 업무 기준
+server.tomcat.threads.max | 500 | VM당 최대 처리 Thread
+server.tomcat.accept-count | 300 | 대기 Queue
+server.tomcat.max-connections | 10000 | 연결 상한
+server.tomcat.connection-timeout | 8s | 연결 Timeout
+server.tomcat.keep-alive-timeout | 5s | KeepAlive 제한
+
+[TABLE 16]
+업무 유형 | 목표 응답 | Transaction Timeout | 비고
+공통 코드 조회 | 1초 이내 | 3초 | Cache 우선
+일반 마케팅 조회 | 3초 이내 | 4~5초 | 기본 온라인
+Single View 조회 | 3초 이내 | 5초 | RDW SQL 품질 중요
+저장/변경 거래 | 3~5초 | 5~10초 | Rollback 기준 명확화
+CruzAPIM 동기 연계 | 3~5초 | 5초 | Read Timeout과 정합
+장시간 처리 | 10초 초과 | 온라인 금지 | 비동기/배치 전환
+
+[TABLE 17]
+원칙 | 설명
+조회는 readOnly=true | 불필요한 Lock/Flush 방지
+온라인 거래는 짧게 | 4~5초 기준
+DB Timeout이 먼저 발생 | Query Timeout < Transaction Timeout
+외부 연계는 격리 | CruzAPIM Timeout 별도 설정
+10초 이상은 비동기화 | 온라인 Thread 장기 점유 방지
+
+[TABLE 18]
+구분 | DataSource 기준
+일반 마케팅 AP | RDW DataSource
+SingleView AP | RDW 전용 DataSource
+BI/분석 | ADW DataSource
+배치/ETL | ETL/DataStage 별도 접속
+로그/감사 | 가능하면 Log/Audit DB 분리
+CruzAPIM 연계 | DB Pool과 별도 HTTP Client Pool
+
+[TABLE 19]
+항목 | 일반 마케팅 AP | SingleView AP | 설명
+maximumPoolSize | 30 | 40 | VM당 DB Connection 상한
+minimumIdle | 10 | 10~15 | 기본 유지 Connection
+connectionTimeout | 2~3초 | 2~3초 | Pool 대기 한도
+validationTimeout | 2초 | 2초 | Connection 검증 한도
+idleTimeout | 10분 | 10분 | 유휴 Connection 반환
+maxLifetime | 30분 이하 | 30분 이하 | DB/L4 Timeout보다 짧게
+keepaliveTime | 5분 | 5분 | Idle Connection 유지
+autoCommit | false | false | 명시적 트랜잭션 관리
+
+[TABLE 20]
+구성 | AP 수 | Pool/VM | 총 Connection
+기본 운영, 일반 AP | 4대 | 30 | 120
+피크 기준 전체 AP | 8대 | 30~40 | 240~320
+스트레스 기준 전체 AP | 12대 | 30~40 | 360~480
+
+[TABLE 21]
+항목 | 권장값 | 설명
+기본 Statement Timeout | 3초 | 일반 조회 기준
+공통 코드 조회 | 1~2초 | Cache 우선
+일반 마케팅 조회 | 2~3초 | 온라인 기준
+Single View 조회 | 3초 | SQL 튜닝 필수
+다운로드/대량조회 | 온라인 금지 | 비동기/배치 전환
+Fetch Size | 100~500 | 조회 특성별 조정
+Max Rows | 업무별 제한 | 무제한 조회 금지
+
+[TABLE 22]
+항목 | 권장값 | 설명
+Connect Timeout | 1~2초 | 접속 실패 빠른 차단
+Read Timeout | 3~5초 | 응답 대기 한도
+Connection Request Timeout | 1초 | HTTP Client Pool 대기
+Max Connection / VM | 80~120 | VM당 HTTP 연결
+Route별 Max Connection | 20~30 | 대상 시스템별 제한
+Retry | 기본 금지 또는 1회 제한 | 중복 처리 방지
+Circuit Breaker | 적용 권장 | 장애 전파 차단
+Bulkhead | 적용 권장 | 대상 시스템별 격리
+
+[TABLE 23]
+항목 | 기준
+GC | G1GC
+Max GC Pause 목표 | 200ms
+Heap 일반 AP | 12GB
+Heap SingleView AP | 12~14GB
+Xss | 512KB
+Metaspace | 1GB
+Heap Dump | OOM 발생 시 자동 생성
+GC Log | 필수
+CPU | 60~70% 이하
+Old 영역 | 지속 증가 시 Memory Leak 점검
+
+[TABLE 24]
+영역 | 항목 | 기준값 | 권장값 | 비고
+사용자/세션 | 전체 사용자 | 21,600 | 21,600 | 3,600지점 × 6명
+사용자/세션 | 설계 세션 | 25,920 | 28,080 | 20~30% 여유
+사용자/세션 | 동시 요청률 | 5% | 10% | 스트레스 15%
+사용자/세션 | 목표 TPS | 360 TPS | 720 TPS | 스트레스 1,080 TPS
+VM | 사양 | 8 vCPU / 32GB | 8 vCPU / 32GB | IaaS 기준
+VM | 처리량 | 250 TPS | 250 TPS | 선도개발로 보정
+서버 수 | 기본 운영 | 총 4대 | 총 4대 | 360 TPS 기준
+서버 수 | 피크/DR | 총 6대 | 총 8대 | 720 TPS 기준
+서버 수 | 스트레스 | 총 10대 | 총 12대 | 1,080 TPS 기준
+Web/L4 | GSLB TTL | 60초 | 30초 | 장애 대응
+Web/L4 | L4 Sticky Timeout | 40분 | 40~60분 | Tomcat보다 길게
+Web/L4 | L4 Idle Timeout | 10초 | 15초 | Client보다 길게
+Web/L4 | Client Timeout | 6초 | 8초 | Transaction보다 길게
+Tomcat | Session Timeout | 30분 | 60분 예외 | 3시간은 예외
+Tomcat | DeltaManager | 센터 내부 | 센터 내부 | 센터 간 미복제
+Tomcat | maxThreads | 400 | 500 | VM당
+Tomcat | minSpareThreads | 50 | 100 | VM당
+Tomcat | acceptCount | 300 | 500 | Queue
+Tomcat | maxConnections | 5,000 | 10,000 | VM당
+Spring | Transaction Timeout | 4초 | 5초 | 일반 온라인
+MyBatis | DB Query Timeout | 2초 | 3초 | SQL 수행 제한
+CruzAPIM | Connect Timeout | 1초 | 2초 | 접속 한도
+CruzAPIM | Read Timeout | 3초 | 5초 | 응답 대기
+Hikari | 일반 AP Pool | 30 | 30 | VM당
+Hikari | SingleView Pool | 35 | 40 | VM당
+Hikari | minimumIdle | 10 | 10~15 | 유지 Connection
+Hikari | connectionTimeout | 2초 | 3초 | Pool 대기
+Hikari | idleTimeout | 10분 | 10분 | 반환
+Hikari | maxLifetime | 30분 이하 | 30분 이하 | DB/L4보다 짧게
+JVM | Heap 일반 AP | 12GB | 12GB | 8 vCPU / 32GB
+JVM | Heap SingleView | 12GB | 14GB | 조회 특성
+JVM | Xss | 512KB | 512KB | Thread 고려
+JVM | GC | G1GC | G1GC | 운영 표준
+JVM | MaxGCPauseMillis | 200ms | 200ms | 응답시간 보호
+
+[TABLE 25]
+기준 | 권고
+세션 설계 | 21,600명 기준, 26,000~28,000 세션 수용
+TPS 산정 | 전체 세션이 아니라 동시 요청자 기준
+일반 운영 | 5% 동시 요청률, 360 TPS
+피크 설계 | 10% 동시 요청률, 720 TPS
+스트레스 검증 | 15% 동시 요청률, 1,080 TPS
+VM 기준 | 8 vCPU / 32GB, 250 TPS/VM
+기본 운영 AP | 센터당 2대, 총 4대
+피크/DR 권장 AP | 센터당 4대, 총 8대
+스트레스/완전 DR AP | 센터당 6대, 총 12대
+Tomcat Thread | 400~500
+Hikari Pool | 일반 AP 30, SingleView AP 40
+Transaction Timeout | 4~5초
+DB Query Timeout | 2~3초
+Client Timeout | 6~8초
+L4 Idle Timeout | 10~15초 이상

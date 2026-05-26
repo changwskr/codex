@@ -1,0 +1,254 @@
+아래처럼 문서를 360 TPS 기준안과 720 TPS 기준안을 함께 비교하는 형식으로 재구성하면 됩니다. 여기서는 360 TPS = 기본 운영 기준, 720 TPS = 피크/확장 기준으로 정의합니다.
+NSIGHT 마케팅플랫폼 용량산정 기준서
+360 TPS / 720 TPS 비교 기준
+1. 도입 전 안내말
+본 문서는 농협상호금융 NSIGHT 마케팅플랫폼의 온라인 AP 용량산정을 위해 360 TPS 기준안과 720 TPS 기준안을 함께 비교하여 제시한다.
+기존 용량산정 기준은 전체 사용자 21,600명, 설계 세션 26,000~28,000개, 목표 응답시간 3초, 8 vCPU / 32GB VM, VM당 250 TPS를 기준으로 정리되어 있다. 이 기준에서 360 TPS는 5% 동시 요청률에 해당하는 기본 운영 기준이고, 720 TPS는 10% 동시 요청률에 해당하는 피크 설계 기준이다.
+2. 공통 산정 전제
+세션 수는 전체 로그인 유지 규모이고, TPS는 실제 동시에 거래를 요청하는 사용자 기준으로 산정한다. 따라서 전체 세션 26,000~28,000개를 그대로 TPS로 환산하면 안 된다.
+3. 360 TPS / 720 TPS 산정 비교
+TPS = 동시 요청자 수 ÷ 목표 응답시간
+기존 기준에서도 21,600명 기준 5% 동시 요청률은 360 TPS, 10% 동시 요청률은 720 TPS로 산정되어 있다.
+4. AP 수량 산정 비교
+4.1 단순 VM 수량 산정
+필요 VM 수 = 목표 TPS ÷ VM당 처리 TPS
+단순 산정만 보면 360 TPS는 2대, 720 TPS는 3대가 필요하다. 그러나 AP Active-Active 구조에서는 한 센터 장애 시 나머지 센터가 전체 TPS를 수용해야 하므로 센터 단위 여유를 반드시 반영해야 한다.
+4.2 센터 장애 고려 AP 구성
+5. 최종 AP 구성 비교
+5.1 360 TPS 기준 구성
+[센터1]
+AP 3대
+[센터2]
+AP 3대
+전체 AP = 6대
+정상 운영 시:
+전체 360 TPS
+센터1 약 180 TPS
+센터2 약 180 TPS
+센터1 장애 시:
+센터2 AP 3대가 전체 360 TPS 수용
+3대 × 250 TPS = 750 TPS
+센터 장애와 AP 1대 장애가 동시에 발생해도:
+잔여 AP 2대 × 250 TPS = 500 TPS
+→ 360 TPS 수용 가능
+따라서 360 TPS 기준에서는 센터당 3대, 전체 6대가 권장 구성이다.
+5.2 720 TPS 기준 구성
+[센터1]
+AP 4대
+[센터2]
+AP 4대
+전체 AP = 8대
+정상 운영 시:
+전체 720 TPS
+센터1 약 360 TPS
+센터2 약 360 TPS
+센터1 장애 시:
+센터2 AP 4대가 전체 720 TPS 수용
+4대 × 250 TPS = 1,000 TPS
+센터 장애와 AP 1대 장애가 동시에 발생해도:
+잔여 AP 3대 × 250 TPS = 750 TPS
+→ 720 TPS 수용 가능
+따라서 720 TPS 기준에서는 센터당 4대, 전체 8대가 권장 구성이다.
+6. 세션 분포 비교
+전체 세션은 두 기준 모두 동일하게 26,000~28,000 세션을 수용한다.
+여기서 중요한 차이는 360 TPS 기준은 AP 수가 적어 VM당 세션 밀도가 높다는 점이다. 따라서 360 TPS 기준 전체 6대 구성은 TPS 관점에서는 충분하지만, DeltaManager 세션 복제와 JVM Heap 관점에서는 세션 크기 최소화가 더 중요하다. 기존 기준에서도 세션은 최소 정보만 저장하고 고객조회 결과, Single View 결과, 거래목록, 캠페인 대상자 목록 등은 세션에 저장하지 않는 것으로 정리되어 있다.
+7. Tomcat 설정 비교
+7.1 360 TPS 기준 설정 예시
+server:
+tomcat:
+threads:
+max: 300
+min-spare: 100
+accept-count: 150
+max-connections: 8192
+connection-timeout: 10s
+keep-alive-timeout: 60s
+max-keep-alive-requests: 100
+7.2 720 TPS 기준 설정 예시
+server:
+tomcat:
+threads:
+max: 500
+min-spare: 100
+accept-count: 200
+max-connections: 8192
+connection-timeout: 10s
+keep-alive-timeout: 60s
+max-keep-alive-requests: 100
+720 TPS 기준에서는 VM당 250 TPS를 안정적으로 달성해야 하므로 평균 응답시간 1.0~1.2초 수준, p95 3초 이하, Busy Thread 70~80% 이하가 성능테스트에서 확인되어야 한다.
+8. HikariCP 설정 비교
+8.1 360 TPS 기준 Hikari 예시
+spring:
+datasource:
+hikari:
+maximum-pool-size: 30
+minimum-idle: 10
+connection-timeout: 3000
+validation-timeout: 3000
+idle-timeout: 600000
+max-lifetime: 1800000
+SingleView AP는 다음처럼 둔다.
+spring:
+datasource:
+hikari:
+maximum-pool-size: 40
+minimum-idle: 10
+connection-timeout: 3000
+validation-timeout: 3000
+idle-timeout: 600000
+max-lifetime: 1800000
+8.2 720 TPS 기준 Hikari 예시
+spring:
+datasource:
+hikari:
+maximum-pool-size: 50
+minimum-idle: 10
+connection-timeout: 3000
+validation-timeout: 3000
+idle-timeout: 600000
+max-lifetime: 1800000
+SingleView AP는 다음처럼 둔다.
+spring:
+datasource:
+hikari:
+maximum-pool-size: 60
+minimum-idle: 15
+connection-timeout: 3000
+validation-timeout: 3000
+idle-timeout: 600000
+max-lifetime: 1800000
+단, Hikari Pool은 AP 1대 기준 설정값이다. 전체 AP 대수와 업무 유형별 Pool을 합산하여 RDW/ADW 전체 DB Session 허용치 이내인지 반드시 검증해야 한다. 자원 경합 차단 원칙에서도 온라인, 배치, 분석, 연계 자원이 동일 자원을 경쟁하지 않도록 DB 세션과 Connection Pool을 통제해야 한다고 정리되어 있다.
+9. JVM 설정 비교
+TPS가 다르더라도 JVM을 과도하게 줄이지 않는 것이 좋다. 세션 수, 로그, APM, 공통 객체, 일시적 피크, 장애 전환 시 부하는 동일하게 고려해야 하기 때문이다.
+10. Timeout 기준 비교
+Timeout은 360 TPS와 720 TPS 모두 동일하게 유지한다.
+기존 문서에서 L4 Idle Timeout을 10~15초로 보는 경우가 있었다면, Tomcat keepAliveTimeout 60초 기준에서는 L4 Idle Timeout을 70~90초로 맞추는 것이 더 안전하다.
+11. 운영 임계치 비교
+12. 360 TPS / 720 TPS 최종 비교표
+13. 문서 결론 문구
+NSIGHT 마케팅플랫폼 용량산정은 360 TPS 기준안과 720 TPS 기준안을 병행 제시한다. 360 TPS 기준안은 전체 사용자 21,600명 중 약 5%가 동시에 거래를 요청하는 기본 운영 기준이며, AP Active-Active 및 센터 장애 대응을 고려할 때 센터당 3대, 전체 6대 구성이 적정하다. 720 TPS 기준안은 약 10% 동시 요청률을 가정한 피크/확장 기준이며, 센터 장애 및 AP 장애 여유를 고려할 때 센터당 4대, 전체 8대 구성이 적정하다. 두 기준 모두 세션 수용 기준은 26,000~28,000 세션으로 동일하게 유지하며, 세션은 120분 기본, 장시간 업무는 180분 예외로 적용한다. 360 TPS 기준은 비용과 운영 효율성이 우수하고, 720 TPS 기준은 피크 대응과 확장 여유가 우수하다. 최종 적용 기준은 선도개발 성능테스트에서 VM당 실측 TPS, DB SQL 평균, Hikari 사용률, Tomcat Busy Thread, GC Pause를 검증한 후 확정한다.
+14. 한 줄 결론
+360 TPS 기준은 센터당 3대·전체 6대, 720 TPS 기준은 센터당 4대·전체 8대이며, 문서는 두 기준을 “기본 운영안”과 “피크/확장안”으로 병행 제시하는 것이 가장 설득력 있습니다.
+
+[TABLE 1]
+구분 | 공통 기준
+지점 수 | 3,600개
+지점당 사용자 | 6명
+전체 사용자 수 | 21,600명
+설계 세션 수 | 26,000~28,000 세션
+목표 응답시간 | p95 3초 이하
+VM 기준 사양 | 8 vCPU / 32GB
+VM당 처리 기준 | 250 TPS
+AP 운영 방식 | 2센터 Active-Active
+세션 유지시간 | 120분 기본 / 180분 예외
+GC | G1GC
+DB SQL 평균 | 100~300ms 목표
+DB SQL p95 | 500ms 이하 목표
+
+[TABLE 2]
+구분 | 360 TPS 기준 | 720 TPS 기준
+적용 의미 | 기본 운영 기준 | 피크/확장 기준
+전체 사용자 | 21,600명 | 21,600명
+동시 요청률 | 약 5% | 약 10%
+동시 요청자 | 약 1,080명 | 약 2,160명
+목표 응답시간 | 3초 | 3초
+산정 TPS | 360 TPS | 720 TPS
+적용 목적 | 일반 업무시간 안정 운영 | 업무 집중·피크·확장 검증
+
+[TABLE 3]
+구분 | 360 TPS 기준 | 720 TPS 기준
+목표 TPS | 360 TPS | 720 TPS
+VM당 처리 기준 | 250 TPS | 250 TPS
+단순 필요 VM | 2대 | 3대
+단순 처리 가능량 | 500 TPS | 750 TPS
+
+[TABLE 4]
+구분 | 360 TPS 기준 | 720 TPS 기준
+단일 센터 최소 VM | 2대 | 3대
+N+1 포함 센터당 권장 VM | 3대 | 4대
+전체 권장 VM | 6대 | 8대
+단일 센터 처리능력 | 3대 × 250 = 750 TPS | 4대 × 250 = 1,000 TPS
+센터 장애 시 수용 여부 | 360 TPS 수용 가능 | 720 TPS 수용 가능
+센터 장애 + AP 1대 장애 | 2대 × 250 = 500 TPS | 3대 × 250 = 750 TPS
+최종 판정 | 안정적 | 안정적
+
+[TABLE 5]
+구분 | 360 TPS 기준 | 720 TPS 기준
+전체 AP 수 | 6대 | 8대
+센터당 AP 수 | 3대 | 4대
+전체 세션 | 26,000~28,000 | 26,000~28,000
+정상 시 센터당 세션 | 13,000~14,000 | 13,000~14,000
+정상 시 VM당 세션 | 약 4,300~4,700 | 약 3,250~3,500
+센터 장애 시 VM당 세션 | 약 8,700~9,300 | 약 6,500~7,000
+
+[TABLE 6]
+설정 항목 | 360 TPS 기준 | 720 TPS 기준 | 설명
+server.tomcat.threads.max | 300 | 400~500 | 동시 요청 처리 Thread
+minSpareThreads | 100 | 100 | 최소 대기 Thread
+acceptCount | 150 | 200 | Thread 포화 시 대기 Queue
+maxConnections | 8192 | 8192 | 최대 연결 수
+connectionTimeout | 10초 | 10초 | 첫 HTTP 요청 대기시간
+keepAliveTimeout | 60초 | 60초 | 다음 요청 대기시간
+maxKeepAliveRequests | 100 | 100 | 연결당 최대 요청 수
+
+[TABLE 7]
+설정 항목 | 360 TPS 기준 | 720 TPS 기준 | 설명
+일반 마케팅 AP Pool | 30 | 50 | CruzAPIM/일반 업무 포함
+SingleView AP Pool | 40 | 60 | RDW 고빈도 조회
+minimum-idle | 10 | 10~15 | 최소 유휴 Connection
+connection-timeout | 3000ms | 3000ms | Pool 대기 상한
+validation-timeout | 3000ms | 3000ms | Connection 검증 상한
+idle-timeout | 600000ms | 600000ms | 10분
+max-lifetime | 1800000ms | 1800000ms | 30분
+
+[TABLE 8]
+설정 항목 | 360 TPS 기준 | 720 TPS 기준 | 설명
+VM Memory | 32GB | 32GB | 동일
+일반 AP Heap | 12GB | 12GB | 동일
+SingleView AP Heap | 12~14GB | 14GB | 720 TPS는 14GB 권장
+-Xss | 512KB | 512KB | 동일
+GC | G1GC | G1GC | 동일
+MaxGCPauseMillis | 200ms | 200ms | 동일
+Heap 사용률 | 70% 이하 | 70% 이하 | 동일
+Full GC | 운영 중 미발생 | 운영 중 미발생 | 동일
+
+[TABLE 9]
+Timeout 항목 | 360 TPS 기준 | 720 TPS 기준 | 설명
+DB Query Timeout | 2~3초 | 2~3초 | SQL 장기 실행 차단
+Hikari Connection Timeout | 3초 | 3초 | Pool 대기 상한
+Spring Transaction Timeout | 4~5초 | 4~5초 | 업무 트랜잭션 상한
+WebTopSuite Request Timeout | 6~8초 | 6~8초 | 사용자 응답 대기
+Tomcat connectionTimeout | 10초 | 10초 | 첫 요청 대기
+Tomcat keepAliveTimeout | 60초 | 60초 | 다음 요청 대기
+L4 Idle Timeout | 70~90초 | 70~90초 | Tomcat KeepAlive보다 길게
+
+[TABLE 10]
+운영 지표 | 360 TPS 기준 | 720 TPS 기준
+Tomcat Busy Thread | 70% 이하 | 70~80% 이하
+JVM Heap 사용률 | 70% 이하 | 70% 이하
+Hikari Pool 사용률 | 70~80% 이하 | 70~80% 이하
+DB SQL 평균 | 100~300ms | 100~300ms
+DB SQL p95 | 500ms 이하 | 500ms 이하
+GC Pause | 100~200ms | 100~200ms
+Tomcat p95 응답시간 | 3초 이하 | 3초 이하
+Full GC | 0회 목표 | 0회 목표
+
+[TABLE 11]
+구분 | 360 TPS 기준 | 720 TPS 기준
+기준 의미 | 기본 운영 기준 | 피크/확장 기준
+동시 요청률 | 약 5% | 약 10%
+동시 요청자 | 약 1,080명 | 약 2,160명
+목표 응답시간 | 3초 | 3초
+VM당 TPS | 250 TPS | 250 TPS
+단순 필요 VM | 2대 | 3대
+센터당 권장 VM | 3대 | 4대
+전체 권장 VM | 6대 | 8대
+단일 센터 처리능력 | 750 TPS | 1,000 TPS
+정상 시 VM당 세션 | 4,300~4,700 | 3,250~3,500
+센터 장애 시 VM당 세션 | 8,700~9,300 | 6,500~7,000
+Tomcat maxThreads | 300 | 400~500
+acceptCount | 150 | 200
+일반 AP Hikari Pool | 30 | 50
+SingleView Hikari Pool | 40 | 60
+JVM Heap | 12GB / 12~14GB | 12GB / 14GB
+적용 판단 | 비용·운영 효율 중심 | 안정성·확장성 중심

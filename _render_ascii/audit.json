@@ -1,0 +1,43 @@
+{
+  "file": "C:\\Users\\chang.JWS\\Documents\\농협 상호금융 정보계 프로젝트\\_render_ascii\\arch_def.docx",
+  "exists": true,
+  "size": 48593,
+  "paragraphs": 26,
+  "tables": 18,
+  "sections": 1,
+  "headings": [
+    "1. 아키텍처 비전과 목표",
+    "2. 아키텍처 설명 방식",
+    "3. Big Picture와 책임 경계",
+    "4. Runtime 기준 아키텍처",
+    "5. 데이터 아키텍처",
+    "6. 인터페이스 및 연계 아키텍처",
+    "7. 물리 및 DR 아키텍처",
+    "8. 세션 아키텍처",
+    "9. 용량산정 기준",
+    "10. 비기능 요구사항",
+    "11. 설계 원칙과 Guardrail",
+    "12. 검증 및 거버넌스",
+    "13. 한 문장 정의"
+  ],
+  "empty_table_cells": 0,
+  "has_document_xml": true,
+  "has_styles_xml": true,
+  "has_header": true,
+  "has_footer": true,
+  "tbl_count_xml": 18,
+  "fixed_row_heights": 0,
+  "pct_table_widths": 0,
+  "grid_col_count": 53,
+  "contains_core_terms": {
+    "Runtime": true,
+    "RDW": true,
+    "ADW": true,
+    "FAST": true,
+    "DEEP": true,
+    "Single View": true,
+    "720 TPS": true,
+    "G1GC": true,
+    "DeltaManager": true
+  }
+}

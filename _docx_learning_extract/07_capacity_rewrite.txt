@@ -1,0 +1,378 @@
+아래는 지금까지 논의한 내용을 농협 상호금융 정보계 NSIGHT 용량산정 및 환경 설정 기준으로 다시 정리한 최종본입니다. 기준은 VM 1대 = 250 TPS 처리 기준, 목표 응답시간 p95 3초, AP Active-Active, 은행 정보계 전용 단말/WebTopSuite 사용을 전제로 합니다.
+1. 전체 기준 요약
+핵심은 세션 수와 TPS를 분리해서 보는 것입니다.
+세션 수 = 로그인 상태로 유지되는 사용자 수
+TPS = 실제 동시에 거래를 요청하는 처리량
+2. 사용자·세션 기준
+농협 상호금융 정보계의 기본 사용자는 다음과 같이 산정합니다.
+3,600개 지점 × 6명 = 21,600명
+여기에 운영 여유율 20~30%를 반영하면 다음과 같습니다.
+따라서 전체 시스템은 최대 약 28,000 세션 수용을 기준으로 설계합니다.
+3. VM 250 TPS 기준 TPS 산정
+목표 응답시간을 3초로 볼 때 TPS는 다음과 같이 산정합니다.
+TPS = 동시 요청자 수 ÷ 목표 응답시간
+따라서 기준은 다음과 같이 잡는 것이 적절합니다.
+4. AP VM 수량 산정
+VM 1대가 250 TPS를 처리한다고 하면 단순 계산은 다음과 같습니다.
+다만 농협 상호금융 정보계는 AP Active-Active 구조이므로, 한 센터 장애 시에도 나머지 센터가 전체 TPS를 감당해야 합니다.
+5. 센터 Active-Active 기준 AP 구성
+5.1 피크 720 TPS 기준 권장 구성
+정상 운영 시에는 다음 구조입니다.
+센터1 AP 4대 + 센터2 AP 4대
+정상 시 50:50 분산
+센터1 약 360 TPS
+센터2 약 360 TPS
+센터 장애 시에는 다음 구조입니다.
+센터1 장애
+↓
+센터2 AP 4대가 전체 720 TPS 수용
+↓
+4대 × 250 TPS = 1,000 TPS
+↓
+피크 720 TPS 처리 가능
+따라서 피크 720 TPS 기준으로는 센터당 4대, 전체 8대가 가장 균형 잡힌 구성입니다.
+5.2 스트레스 1,080 TPS까지 상시 보장하려면
+즉, 720 TPS를 운영 피크 기준으로 보면 8대, 1,080 TPS까지 센터 장애 상황에서도 보장하려면 12대가 필요합니다.
+6. 세션 분포 기준
+피크 720 TPS 기준으로 센터당 4대, 전체 8대를 적용하면 세션 분포는 다음과 같습니다.
+6.1 정상 운영 시
+6.2 한 센터 장애 시
+따라서 설계 문구는 다음과 같이 정리할 수 있습니다.
+VM 1대는 정상 운영 시 약 3,500 세션, 센터 장애 시 최대 약 7,000 세션까지 수용 가능한 구조로 설계한다.
+7. 세션 유지시간 기준
+은행 정보계 전용 단말/WebTopSuite 기준에서는 일반 웹처럼 30분 세션은 짧습니다.
+Spring Boot 설정 예시는 다음과 같습니다.
+server:
+servlet:
+session:
+timeout: 120m
+cookie:
+http-only: true
+secure: true
+same-site: Lax
+장시간 상담 업무는 업무 특성에 따라 다음처럼 예외 적용합니다.
+server:
+servlet:
+session:
+timeout: 180m
+단, 세션에는 반드시 최소 정보만 저장해야 합니다.
+8. HTTP Connection과 Session 관계
+중요한 결론은 다음입니다.
+Connection은 통신 통로이고, Session은 로그인 상태입니다.
+따라서 Tomcat의 connectionTimeout, keepAliveTimeout으로 연결이 끊겨도 세션이 끊기는 것은 아닙니다.
+로그인 성공
+↓
+Tomcat Session 생성
+↓
+JSESSIONID 발급
+↓
+WebTopSuite가 JSESSIONID 저장
+↓
+HTTP 연결은 Timeout으로 종료 가능
+↓
+다음 거래 시 새 연결 생성
+↓
+기존 JSESSIONID 쿠키 전달
+↓
+Tomcat은 기존 세션 조회
+즉, 거래 요청 시 기존 연결이 살아 있으면 재사용하고, 끊겼으면 새 연결을 맺되 기존 JSESSIONID를 보내면 세션은 유지됩니다.
+9. Tomcat 설정 기준
+VM 1대 250 TPS 기준에서는 Tomcat 설정을 다음처럼 정비합니다.
+server:
+tomcat:
+threads:
+max: 500
+min-spare: 100
+accept-count: 200
+max-connections: 8192
+connection-timeout: 10s
+keep-alive-timeout: 60s
+max-keep-alive-requests: 100
+10. Tomcat Thread와 TPS 관계
+VM당 250 TPS를 처리하려면 평균 응답시간이 중요합니다.
+필요 Busy Thread ≒ TPS × 평균 응답시간
+따라서 중요한 결론은 다음입니다.
+p95 응답시간은 3초 이하로 관리하되, VM당 250 TPS를 달성하려면 평균 응답시간은 1.0~1.2초 수준이어야 한다.
+11. JVM 설정 기준
+11.1 일반 AP
+-Xms12g
+-Xmx12g
+-Xss512k
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=200
+-XX:MetaspaceSize=256m
+-XX:MaxMetaspaceSize=1g
+-XX:ReservedCodeCacheSize=256m
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/logs/dump
+-XX:+ExitOnOutOfMemoryError
+-Xlog:gc*:file=/logs/gc/nsight-ap-gc-%t.log:time,uptime,level,tags:filecount=10,filesize=100M
+11.2 SingleView AP
+-Xms14g
+-Xmx14g
+-Xss512k
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=200
+-XX:MetaspaceSize=256m
+-XX:MaxMetaspaceSize=1g
+-XX:ReservedCodeCacheSize=256m
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/logs/dump
+-XX:+ExitOnOutOfMemoryError
+-Xlog:gc*:file=/logs/gc/nsight-singleview-gc-%t.log:time,uptime,level,tags:filecount=10,filesize=100M
+12. HikariCP 설정 기준
+VM당 250 TPS 기준에서는 기존 Pool 30~40은 다소 부족할 수 있습니다.
+12.1 일반 온라인 AP
+spring:
+datasource:
+hikari:
+maximum-pool-size: 50
+minimum-idle: 10
+connection-timeout: 3000
+validation-timeout: 3000
+idle-timeout: 600000
+max-lifetime: 1800000
+12.2 SingleView AP
+spring:
+datasource:
+hikari:
+maximum-pool-size: 60
+minimum-idle: 15
+connection-timeout: 3000
+validation-timeout: 3000
+idle-timeout: 600000
+max-lifetime: 1800000
+다만 전체 DB Session 총량을 반드시 계산해야 합니다.
+예를 들어 전체 8대가 모두 SingleView AP이고 Pool 60을 적용하면:
+8대 × 60 = 480 DB Connection
+여기에 일반 AP, Batch, ETL, BI, Interface Pool이 추가됩니다. 따라서 DBA와 RDW/ADW 전체 Session 허용치를 반드시 맞춰야 합니다.
+13. DB SQL 기준
+VM당 250 TPS를 달성하려면 SQL 성능이 핵심입니다.
+정리하면 다음과 같습니다.
+정상 SQL은 100~300ms 안에 끝나야 하고, 2~3초를 넘는 SQL은 Query Timeout으로 차단해야 한다.
+14. Timeout 정합성
+Timeout은 순서가 중요합니다.
+특히 기존에 L4 Idle Timeout을 10~15초로 생각했다면, keepAliveTimeout=60s 기준에서는 짧습니다.
+Tomcat keepAliveTimeout = 60초
+L4 Idle Timeout = 70~90초 권장
+15. 운영 임계치 기준
+16. 최종 권장 구성
+16.1 피크 720 TPS 기준
+16.2 스트레스 1,080 TPS 기준
+17. 최종 설정 요약표
+18. 최종 결론
+농협 상호금융 정보계 NSIGHT 온라인 AP 용량산정은 VM 1대당 250 TPS를 기준으로 정비한다. 전체 사용자 21,600명, 여유율 포함 26,000~28,000 세션을 기준으로 하며, 동시 요청률 10% 피크 시 720 TPS를 목표로 산정한다. AP Active-Active와 센터 장애 대응을 고려하면 피크 기준 센터당 4대, 전체 8대가 적정하며, 스트레스 1,080 TPS까지 보장하려면 센터당 6대, 전체 12대가 필요하다. Tomcat은 maxThreads 500, minSpareThreads 100, acceptCount 200, maxConnections 8192, keepAliveTimeout 60초를 기준으로 하고, JVM은 12~14GB Heap과 G1GC, Hikari Pool은 일반 50개·SingleView 60개를 1차 기준으로 적용한다. 단, 이 기준은 평균 응답시간 1.0~1.2초, p95 3초 이하, DB SQL 평균 100~300ms, Hikari 사용률 70~80% 이하, Tomcat Busy Thread 70~80% 이하가 성능테스트에서 확인된다는 조건에서 유효하다.
+한 줄로 정리하면 다음입니다.
+피크 720 TPS 기준은 전체 8대, 스트레스 1,080 TPS 기준은 전체 12대이며, 세션은 26,000~28,000개, VM당 정상 3,500 세션·장애 시 7,000 세션, 세션 시간은 120분 기본·180분 예외로 설계하는 것이 가장 균형 잡힌 안입니다.
+
+[TABLE 1]
+구분 | 최종 기준
+전체 지점 수 | 3,600개
+지점당 사용자 | 6명
+기본 사용자/세션 수 | 21,600명
+운영 여유율 반영 세션 | 26,000~28,000 세션
+목표 응답시간 | p95 3초 이하
+VM 1대 처리 기준 | 250 TPS
+VM 사양 | 8 vCPU / 32GB
+일반 피크 TPS | 720 TPS
+스트레스 TPS | 1,080 TPS
+권장 AP 구성 | 피크 기준 전체 8대, 센터당 4대
+세션 Idle Timeout | 120분
+장시간 업무 세션 | 180분 예외
+절대 세션 만료 | 8~12시간
+
+[TABLE 2]
+구분 | 세션 수
+기본 세션 | 21,600
+20% 여유 | 25,920
+30% 여유 | 28,080
+최종 설계 기준 | 26,000~28,000 세션
+
+[TABLE 3]
+시나리오 | 전체 사용자 | 동시 요청률 | 동시 요청자 | 목표 응답시간 | 산정 TPS
+일반 | 21,600명 | 5% | 1,080명 | 3초 | 360 TPS
+피크 | 21,600명 | 10% | 2,160명 | 3초 | 720 TPS
+스트레스 | 21,600명 | 15% | 3,240명 | 3초 | 1,080 TPS
+
+[TABLE 4]
+구분 | 기준
+일반 처리 기준 | 360 TPS
+피크 처리 기준 | 720 TPS
+스트레스 검증 기준 | 1,080 TPS
+
+[TABLE 5]
+시나리오 | 목표 TPS | VM당 TPS | 최소 VM 수 | N+1 권장
+일반 | 360 TPS | 250 TPS | 2대 | 3대
+피크 | 720 TPS | 250 TPS | 3대 | 4대
+스트레스 | 1,080 TPS | 250 TPS | 5대 | 6대
+
+[TABLE 6]
+구분 | 기준
+전체 목표 TPS | 720 TPS
+VM당 처리 기준 | 250 TPS
+단일 센터 최소 VM | 3대
+N+1 포함 센터당 VM | 4대
+전체 권장 VM | 8대
+
+[TABLE 7]
+구분 | 기준
+전체 목표 TPS | 1,080 TPS
+VM당 처리 기준 | 250 TPS
+단일 센터 최소 VM | 5대
+N+1 포함 센터당 VM | 6대
+전체 권장 VM | 12대
+
+[TABLE 8]
+구분 | 세션 수
+전체 세션 | 26,000~28,000
+센터당 세션 | 13,000~14,000
+센터당 AP 수 | 4대
+VM당 세션 | 약 3,250~3,500
+
+[TABLE 9]
+구분 | 세션 수
+전체 세션 | 26,000~28,000
+잔여 센터 AP 수 | 4대
+VM당 세션 | 약 6,500~7,000
+
+[TABLE 10]
+구분 | 권장값
+일반 업무 세션 Idle Timeout | 120분
+장시간 상담/마케팅 업무 | 180분 예외
+절대 세션 만료 | 8~12시간
+화면 잠금 | 30~60분 무조작 시 검토
+중요 업무 재인증 | 다운로드, 대량조회, 권한변경 시 적용
+
+[TABLE 11]
+세션 저장 가능 | 세션 저장 금지
+userId | 고객조회 결과
+branchId | Single View 결과
+roleId | 거래 목록
+authLevel | 캠페인 대상자 목록
+maskingLevel | 대량 조회 데이터
+centerId | BI 결과 데이터
+
+[TABLE 12]
+구분 | 의미 | 유지 단위
+TCP/HTTP Connection | WebTopSuite와 Tomcat 사이의 연결 | 초 단위
+HTTP Request | 실제 거래 요청 1건 | 거래 단위
+Session | 로그인 사용자 상태 | 분/시간 단위
+JSESSIONID | 세션을 찾기 위한 쿠키 | 세션 유지기간
+
+[TABLE 13]
+설정 | 권장값 | 의미
+maxThreads | 500 | 동시에 처리 가능한 최대 Worker Thread
+minSpareThreads | 100 | 최소 대기 Thread
+acceptCount | 200 | Thread 포화 시 대기 연결 Queue
+maxConnections | 8192 | Tomcat이 유지 가능한 최대 연결 수
+connectionTimeout | 10초 | 연결 후 첫 HTTP 요청 대기시간
+keepAliveTimeout | 60초 | 요청 처리 후 다음 요청 대기시간
+maxKeepAliveRequests | 100 | 한 연결에서 처리할 최대 요청 수
+
+[TABLE 14]
+평균 응답시간 | 250 TPS 처리 시 필요 Busy Thread | 해석
+0.8초 | 200개 | 안정
+1.0초 | 250개 | 안정
+1.2초 | 300개 | 주의
+1.5초 | 375개 | 위험
+3.0초 | 750개 | 불가능
+
+[TABLE 15]
+항목 | 기준
+일반 AP Heap | 12GB
+SingleView AP Heap | 14GB
+-Xss | 512KB
+GC | G1GC
+목표 GC Pause | 100~200ms
+Warning | 300ms 이상 반복
+Critical | 500ms 이상 반복 또는 Full GC
+Heap 사용률 | 70% 이하
+Full GC | 운영 중 미발생 원칙
+
+[TABLE 16]
+구분 | 권장 Pool
+일반 온라인 AP | 50
+SingleView AP | 60
+Hikari 사용률 | 70~80% 이하
+Connection Timeout | 3초
+Idle Timeout | 10분
+Max Lifetime | 30분
+
+[TABLE 17]
+항목 | 목표
+DB SQL 평균 | 100~300ms
+DB SQL p95 | 500ms 이하
+1초 이상 반복 SQL | 튜닝 대상
+Query Timeout | 2~3초
+Full Scan | 온라인 SQL 금지
+대량 집계 SQL | RDW 온라인 조회에서 금지
+SingleView SQL | 최소화
+조회 결과 | 요약·페이징 중심
+
+[TABLE 18]
+구분 | 권장값 | 의미
+DB Query Timeout | 2~3초 | SQL 장기 실행 차단
+Hikari Connection Timeout | 3초 | DB Connection 대기 상한
+Spring Transaction Timeout | 4~5초 | 업무 트랜잭션 상한
+WebTopSuite Request Timeout | 6~8초 | 사용자 응답 대기
+Tomcat connectionTimeout | 10초 | 연결 후 첫 요청 대기
+Tomcat keepAliveTimeout | 60초 | 다음 요청 대기
+L4 Idle Timeout | 70~90초 | Tomcat KeepAlive보다 길게
+
+[TABLE 19]
+영역 | 정상 기준 | Warning | Critical
+Tomcat Busy Thread | 70% 이하 | 80% 이상 지속 | 90% 이상 지속
+JVM Heap 사용률 | 70% 이하 | GC 후 70% 이상 지속 | 80~90% 이상 또는 Full GC
+Hikari Pool 사용률 | 70~80% 이하 | 80% 이상 지속 | 90~100% 또는 Pending 증가
+DB SQL 평균 | 100~300ms | 300~500ms | 1초 이상 반복
+DB SQL p95 | 500ms 이하 | 1초 접근 | 2~3초 Timeout
+GC Pause | 100~200ms | 300ms 이상 반복 | 500ms 이상 반복
+Tomcat p95 응답시간 | 3초 이하 | 3초 초과 지속 | 5초 이상 지속
+
+[TABLE 20]
+구분 | 최종 권장
+VM당 처리 기준 | 250 TPS
+전체 목표 TPS | 720 TPS
+센터당 AP | 4대
+전체 AP | 8대
+정상 시 센터당 TPS | 약 360 TPS
+센터 장애 시 잔여 센터 처리능력 | 1,000 TPS
+세션 수용 | 26,000~28,000
+정상 시 VM당 세션 | 약 3,500
+장애 시 VM당 세션 | 약 7,000
+
+[TABLE 21]
+구분 | 최종 권장
+전체 목표 TPS | 1,080 TPS
+센터당 AP | 6대
+전체 AP | 12대
+센터 장애 시 잔여 센터 처리능력 | 1,500 TPS
+
+[TABLE 22]
+영역 | 항목 | 최종 기준
+VM | 사양 | 8 vCPU / 32GB
+VM | 처리 기준 | 250 TPS
+AP | 피크 기준 구성 | 전체 8대
+AP | 스트레스 기준 구성 | 전체 12대
+Session | 전체 수용 | 26,000~28,000
+Session | Idle Timeout | 120분
+Session | 장시간 예외 | 180분
+Tomcat | maxThreads | 500
+Tomcat | minSpareThreads | 100
+Tomcat | acceptCount | 200
+Tomcat | maxConnections | 8192
+Tomcat | connectionTimeout | 10초
+Tomcat | keepAliveTimeout | 60초
+Tomcat | maxKeepAliveRequests | 100
+JVM | Heap | 일반 12GB / SingleView 14GB
+JVM | GC | G1GC
+JVM | Xss | 512KB
+Hikari | 일반 AP Pool | 50
+Hikari | SingleView Pool | 60
+Hikari | connectionTimeout | 3초
+DB | SQL 평균 | 100~300ms
+DB | SQL p95 | 500ms 이하
+DB | Query Timeout | 2~3초
+Spring | Transaction Timeout | 4~5초
+WebTopSuite | Request Timeout | 6~8초
+L4 | Idle Timeout | 70~90초

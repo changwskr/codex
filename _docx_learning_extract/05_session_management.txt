@@ -1,0 +1,304 @@
+아래는 NSIGHT 마케팅플랫폼 세션 아키텍처 정리본입니다. 전제는 명확합니다.
+센터 간 접속은 GSLB 기반 DNS Lookup으로 센터 L4를 선택하고, WebTopSuite 단말은 선택된 센터 L4에 직접 접근한다. 세션은 센터 내부 Tomcat Cluster의 DeltaManager로 복제한다. 센터 간 세션 복제는 기본 적용하지 않는다.
+NSIGHT 세션 아키텍처 설계서
+GSLB + WebTopSuite 직접 L4 접근 + Tomcat DeltaManager 기준
+1. 설계 목적
+NSIGHT 마케팅플랫폼은 WebTopSuite 단말을 사용하고, 사용자는 센터 간 GSLB를 통해 최초 접속 센터를 결정한 뒤 해당 센터의 L4를 통해 마케팅 AP 또는 싱글뷰 AP에 접근한다.
+따라서 세션관리는 다음 목적을 만족해야 한다.
+2. 전체 아키텍처 구조
+2.1 전체 접속 구조
+[WebTopSuite 단말]
+│
+│ ① GSLB DNS Lookup
+▼
+[GSLB]
+│
+│ ② 센터 L4 VIP 반환
+▼
+[WebTopSuite 단말]
+│
+│ ③ 반환된 L4 VIP 기준으로 CENTER_ID 식별
+│ ④ CENTER_ID / CENTER_L4_URL 저장
+│ ⑤ 이후 업무 요청은 해당 센터 L4로 직접 접근
+▼
+[센터 L4]
+│
+│ ⑥ L4 Sticky / Persistence 적용
+▼
+[센터 내부 Tomcat AP Cluster]
+│
+├─ Marketing AP Cluster
+├─ SingleView AP Cluster
+└─ 필요 시 업무별 AP Cluster
+│
+└─ Tomcat DeltaManager로 센터 내부 세션 복제
+2.2 센터별 물리 구조
+3. 핵심 설계 결정
+4. GSLB 기준 접속 설계
+4.1 GSLB의 역할
+GSLB는 매 요청을 처리하는 Gateway가 아니다. NSIGHT 구조에서 GSLB의 역할은 최초 센터 선택이다.
+중요한 점은 DNS Lookup은 센터 ID를 직접 반환하는 것이 아니라 일반적으로 L4 VIP를 반환한다는 것입니다. 따라서 WebTopSuite가 L4 VIP와 CENTER_ID를 매핑해야 합니다.
+4.2 CENTER_ID 매핑 방식
+GSLB Lookup 결과
+10.10.10.100 → CENTER_1
+10.20.10.100 → CENTER_2
+5. WebTopSuite 단말 처리 로직
+5.1 최초 기동 및 로그인 흐름
+1. WebTopSuite 기동
+2. GSLB DNS Lookup 수행
+3. 센터 L4 VIP 반환
+4. 반환된 VIP 기준 CENTER_ID 식별
+5. CENTER_ID, CENTER_L4_URL 저장
+6. 해당 센터 L4로 로그인 요청
+7. L4가 센터 내부 AP로 라우팅
+8. 로그인 성공
+9. JSESSIONID 발급
+10. Tomcat DeltaManager가 센터 내부 AP Cluster에 세션 복제
+5.2 정상 업무 요청 흐름
+1. WebTopSuite가 저장된 CENTER_L4_URL 확인
+2. CENTER_L4_URL로 업무 요청 전송
+3. L4 Sticky 기준으로 기존 AP에 요청 전달
+4. AP가 JSESSIONID 기준 세션 확인
+5. 업무 처리
+6. RDW 조회 또는 CruzAPIM 연계 수행
+7. 응답 반환
+5.3 센터 장애 감지 흐름
+1. WebTopSuite가 현재 CENTER_L4_URL 호출
+2. 접속 실패 또는 Timeout 발생
+3. 동일 센터 L4 재시도 1~2회
+4. 실패 지속 시 GSLB DNS 재조회
+5. 대체 센터 L4 VIP 수신
+6. CENTER_ID 변경
+7. 사용자에게 재로그인 안내
+8. 대체 센터로 로그인 후 업무 재개
+6. Tomcat DeltaManager 세션 설계
+6.1 DeltaManager 적용 목적
+Tomcat DeltaManager는 동일 Tomcat Cluster 내 세션 변경분을 복제하여 AP 장애 시 세션 유실을 줄이는 방식이다.
+[AP-01 세션 생성]
+↓
+[DeltaManager]
+↓
+[AP-02에 세션 복제]
+AP-01 장애 시 L4가 AP-01을 제외하고 AP-02로 라우팅하면, AP-02는 복제된 세션을 사용해 업무를 이어갈 수 있다.
+6.2 적용 범위
+6.3 Cluster 분리 기준
+마케팅 AP와 싱글뷰 AP는 하나의 DeltaManager Cluster로 묶으면 안된다.
+권고 문장:
+DeltaManager는 사용자 화면 요청을 처리하는 AP Cluster에만 적용한다.
+7. L4 Sticky와 DeltaManager 관계
+L4 Sticky와 DeltaManager는 대체 관계가 아니라 보완 관계입니다.
+정상 시에는 Sticky로 세션 이동을 줄이고, 장애 시에는 DeltaManager로 동일 센터 내 세션 연속성을 확보합니다.
+8. 정상/장애 시나리오
+8.1 정상 시나리오
+WebTopSuite
+↓
+CENTER_1 L4
+↓
+Marketing AP-01
+↓
+JSESSIONID 생성
+↓
+DeltaManager가 AP-02에 세션 복제
+결과:
+8.2 동일 센터 AP 장애
+Marketing AP-01 장애
+↓
+L4 Health Check 실패
+↓
+AP-01 Pool 제외
+↓
+WebTopSuite 요청이 AP-02로 전달
+↓
+AP-02가 DeltaManager 복제 세션 확인
+↓
+업무 지속
+8.3 센터 장애
+CENTER_1 L4 또는 센터 전체 장애
+↓
+WebTopSuite 접속 실패
+↓
+GSLB DNS 재조회
+↓
+CENTER_2 L4 VIP 반환
+↓
+WebTopSuite가 CENTER_ID를 CENTER_2로 변경
+↓
+CENTER_2 접속
+↓
+재로그인
+↓
+업무 재개
+8.4 센터 복구 후 Failback
+센터 복구 후 즉시 원복하면 세션 혼선이 발생할 수 있습니다.
+권고:
+Failback은 강제 세션 이동이 아니라 신규 접속 중심의 점진적 원복으로 수행한다.
+9. 세션 데이터 설계
+DeltaManager를 사용할 경우 세션 크기가 매우 중요합니다. 세션이 커지면 복제 부하가 증가하고 AP 성능이 떨어집니다.
+9.1 세션 저장 가능 항목
+9.2 세션 저장 금지 항목
+핵심 원칙:
+세션에는 “사용자가 누구이고 무엇을 볼 수 있는가”만 저장하고, “조회한 업무 데이터”는 저장하지 않는다.
+10. Cookie 설계
+Cookie 보안 속성
+11. Tomcat DeltaManager 설정 예시
+아래는 개념 예시입니다. 실제 설정은 Tomcat 버전, 네트워크 정책, 멀티캐스트 허용 여부에 따라 조정해야 합니다.
+<Engine name="Catalina" defaultHost="localhost" jvmRoute="MKT-C1-AP01">
+<Cluster className="org.apache.catalina.ha.tcp.SimpleTcpCluster"
+channelSendOptions="use_ack,sync">
+<Manager className="org.apache.catalina.ha.session.DeltaManager"
+expireSessionsOnShutdown="false"
+notifyListenersOnReplication="true"/>
+<Channel className="org.apache.catalina.tribes.group.GroupChannel">
+<!-- 센터1 Marketing Cluster 전용 Membership -->
+<Membership className="org.apache.catalina.tribes.membership.McastService"
+address="228.10.10.11"
+port="45564"
+frequency="500"
+dropTime="3000"/>
+<!-- AP-01의 세션 복제 수신 포트 -->
+<Receiver className="org.apache.catalina.tribes.transport.nio.NioReceiver"
+address="10.10.11.101"
+port="5001"
+autoBind="100"
+selectorTimeout="5000"
+maxThreads="6"/>
+<Sender className="org.apache.catalina.tribes.transport.ReplicationTransmitter">
+<Transport className="org.apache.catalina.tribes.transport.nio.PooledParallelSender"/>
+</Sender>
+<Interceptor className="org.apache.catalina.tribes.group.interceptors
+::contentReference[oaicite:2]{index=2}"
+
+[TABLE 1]
+목적 | 설명
+센터 선택 | GSLB DNS Lookup을 통해 접속 가능한 센터 L4 식별
+센터 유지 | WebTopSuite가 선택된 센터 정보를 보관하고 해당 센터 L4로 직접 접근
+AP 장애 대응 | 같은 센터 내 AP 장애 시 다른 AP에서 세션 유지
+세션 복제 | Tomcat DeltaManager로 센터 내부 AP 간 세션 복제
+장애 단순화 | 센터 장애 시 타 센터로 전환하되, 기본적으로 재로그인 정책 적용
+보안 유지 | 세션에는 최소 인증·권한 정보만 저장하고 업무 데이터는 저장하지 않음
+
+[TABLE 2]
+
+[TABLE 3]
+구분 | 결정
+센터 선택 | GSLB DNS Lookup으로 센터 L4 VIP 반환
+센터 식별 | WebTopSuite가 반환된 L4 VIP를 기준으로 CENTER_ID 매핑
+업무 요청 | WebTopSuite가 선택된 센터 L4로 직접 접근
+L4 역할 | 센터 내부 AP 로드밸런싱, Health Check, Sticky 적용
+세션 저장 | Tomcat Local Session
+세션 복제 | Tomcat DeltaManager
+복제 범위 | 동일 센터 내부 AP Cluster
+센터 간 세션 복제 | 기본 미적용
+AP 장애 | 같은 센터 내 다른 AP에서 복제 세션으로 업무 지속
+센터 장애 | 타 센터 L4로 전환 후 재로그인 또는 재인증
+세션 데이터 | 사용자ID, 권한, 지점, 인증상태 중심
+업무 데이터 | 세션 저장 금지
+
+[TABLE 4]
+역할 | 설명
+DNS Lookup | WebTopSuite가 대표 도메인 조회
+센터 L4 반환 | 정상 센터의 L4 VIP 반환
+장애 센터 제외 | Health Check 기준 장애 센터 제외
+재조회 지원 | 센터 장애 시 WebTopSuite가 재조회 가능
+트래픽 분산 | 센터 간 접속 분산 정책 적용 가능
+
+[TABLE 5]
+항목 | 기준
+CENTER_ID 결정 | 반환된 L4 VIP 기준
+CENTER_L4_URL | 센터별 L4 접속 URL
+저장 위치 | WebTopSuite 로컬 설정 또는 Cookie/Local Storage 정책
+재조회 조건 | 센터 L4 접속 실패, Health Check 실패, Timeout 연속 발생
+주의사항 | 매 요청마다 GSLB Lookup하지 않음
+
+[TABLE 6]
+구분 | 적용 여부 | 설명
+같은 센터 내 Marketing AP Cluster | 적용 | 마케팅 업무 세션 유지
+같은 센터 내 SingleView AP Cluster | 적용 | 싱글뷰 업무 세션 유지
+센터 간 AP Cluster | 기본 미적용 | 지연, 복잡도, 장애 전파 위험
+
+[TABLE 7]
+Cluster | 대상 | 세션 성격
+Marketing AP Cluster | 일반 마케팅 AP | 사용자 업무상태, 캠페인 권한, 메뉴 권한
+SingleView AP Cluster | 싱글뷰 AP | 사용자 권한, 지점, 마스킹 기준
+
+[TABLE 8]
+구분 | 역할
+L4 Sticky | 정상 시 동일 사용자를 동일 AP로 라우팅하여 세션 접근 안정화
+DeltaManager | 해당 AP 장애 시 다른 AP에서 세션을 이어받도록 복제
+Health Check | 장애 AP를 빠르게 제외
+Rejoin 정책 | 복구 AP를 점진적으로 투입
+
+[TABLE 9]
+항목 | 결과
+사용자는 CENTER_1에 고정 | 예
+요청은 L4 Sticky로 AP-01에 유지 | 예
+세션은 AP Cluster 내부 복제 | 예
+업무 연속성 | 정상
+
+[TABLE 10]
+항목 | 정책
+사용자 재로그인 | 불필요 목표
+세션 유지 | DeltaManager 복제 세션 사용
+장애 감지 | L4 Health Check
+운영 조치 | AP-01 재기동 또는 제외 후 점검
+
+[TABLE 11]
+항목 | 정책
+센터 간 세션 유지 | 기본 미보장
+사용자 처리 | 재로그인
+업무 데이터 유실 | 세션에 업무 데이터를 저장하지 않으므로 최소화
+운영 기준 | 센터 전환 로그, 사용자 안내, 장애 공지 필요
+
+[TABLE 12]
+단계 | 처리
+1 | CENTER_1 복구
+2 | 운영자가 Health Check 정상 확인
+3 | 신규 로그인부터 CENTER_1로 일부 유입
+4 | 기존 CENTER_2 세션은 유지
+5 | 점진적 트래픽 원복
+6 | 세션 만료 후 균형화
+
+[TABLE 13]
+항목 | 설명
+User ID | 사용자 식별자
+Branch ID | 지점 코드
+Department ID | 부서 코드
+Role ID | 권한 그룹
+Menu Auth Summary | 메뉴 권한 요약
+Masking Level | 개인정보 마스킹 기준
+Auth Status | 인증 상태
+Login Time | 로그인 시각
+Center ID | 현재 센터
+AP ID | 현재 AP
+CSRF Token | 요청 위변조 방지
+Last Access Time | 마지막 접근 시각
+
+[TABLE 14]
+항목 | 금지 이유
+고객 Single View 조회 결과 | 개인정보 위험, 세션 복제량 증가
+고객 거래 목록 | 대량 데이터, 세션 비대화
+캠페인 대상자 목록 | 복제 부하 폭증
+리포트 결과 | BI/ADW 또는 별도 임시저장소 대상
+파일 다운로드 데이터 | 세션이 아니라 파일 관리 테이블/임시저장소 사용
+CruzAPIM 응답 전문 | 연계 결과는 로그 또는 업무테이블 기준 관리
+대량 검색 결과 | 조회조건 또는 페이징 키만 저장
+RDW ResultSet | 절대 저장 금지
+
+[TABLE 15]
+Cookie | 목적 | 예시
+JSESSIONID | Tomcat 세션 식별 | WAS 세션
+CENTER_ID | 현재 접속 센터 | CENTER_1, CENTER_2
+CENTER_L4 | 현재 센터 L4 식별 | 내부 식별값 또는 Alias
+ROUTE_ID | L4 또는 Tomcat Route 식별 | AP Route
+CLIENT_TRACE_ID | 단말 추적 | UUID
+FAILOVER_FLAG | 센터 전환 여부 | Y/N
+
+[TABLE 16]
+속성 | 권장
+HttpOnly | true
+Secure | true
+SameSite | Lax 또는 업무정책에 따라 None
+Path | 업무 Context 기준
+Domain | 농협 표준 도메인 정책 기준
+Session ID Rotation | 로그인 성공 시 JSESSIONID 재발급
+Timeout | Idle Timeout과 연계
